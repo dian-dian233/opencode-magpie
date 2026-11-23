@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "opencode-magpie",
+  "version": "0.1.0",
+  "description": "OpenCode V2 provider plugin that registers a Magpie gateway and discovers its model catalog.",
+  "type": "module",
+  "license": "MIT",
+  "repository": "github:laxtiz/opencode-magpie",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "magpie",
+    "provider",
+    "models"
+  ],
+  "exports": {
+    ".": "./index.ts",
+    "./server": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@opencode/plugin": "^2.4.0"
+  }
+}

@@ -4,50 +4,51 @@ OpenCode V2 server plugin that turns a [Magpie](https://github.com/yetone/magpie
 gateway into an OpenCode provider named `magpie`.
 
 It reads the gateway model catalog (`GET /v1/models`, plus `GET /v1/models?kind=image`)
-and maps each entry onto an OpenCode chat or image model. Ported from the pi agent
-extension `~/.pi/agent/extensions/magpie.ts`.
+and maps each entry onto an OpenCode chat or image model.
 
 - package: `opencode-magpie`
 - plugin id: `opencode.magpie`
 - provider / integration id: `magpie`
 
-当前实现已在 OpenCode `v2.4.0` 上实测：20 个 chat 模型、4 个 image 模型，聊天、工具调用、
-`#variant` 推理等级，以及内置 `generate_image` 工具均可用。
+已在 OpenCode `v2.4.0` 上实测：chat、工具调用、`#variant` 推理等级，以及内置
+`generate_image` 工具均可用。
 
 ## Install
 
-```bash
-# 1. 放到插件目录（本目录就是插件的完整内容）
-mkdir -p ~/.config/opencode/plugins
-cp -R opencode-magpie ~/.config/opencode/plugins/magpie
+从 GitHub 安装：
 
-# 2. 注册插件
+```bash
+opencode plugin add https://github.com/laxtiz/opencode-magpie
 ```
 
-`~/.config/opencode/opencode.json`（或 `opencode.jsonc`）：
+这会把插件写进全局 `~/.config/opencode/opencode.json`，代码缓存到
+`~/.cache/opencode/npm/`。
+
+```bash
+opencode plugin list      # opencode.magpie  <commit>  https://github.com/...
+opencode plugin check     # 是否落后于 upstream
+opencode plugin update    # 拉取最新 commit
+opencode plugin remove https://github.com/laxtiz/opencode-magpie
+```
+
+需要改插件选项时，把配置项改成对象形式：
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
-    "/home/<you>/.config/opencode/plugins/magpie",
-    // 或带 options：
-    // {
-    //   "package": "/home/<you>/.config/opencode/plugins/magpie",
-    //   "options": {
-    //     "baseURL": "http://127.0.0.1:3425/v1",
-    //     "apiKey": "{env:MAGPIE_API_KEY}",
-    //     "includeImages": true
-    //   }
-    // }
+    {
+      "package": "https://github.com/laxtiz/opencode-magpie",
+      "options": {
+        "baseURL": "http://192.168.1.20:3425/v1",
+        "includeImages": true
+      }
+    }
   ]
 }
 ```
 
-也支持把 `opencode-magpie/` 直接放进项目的 `.opencode/plugins/`（自动加载）。
-
-插件不依赖本地 `node_modules`：`@opencode/plugin` 和 `@opencode/ai` 由 OpenCode 运行时提供，
-`package.json` 里只声明了 peer dependency。
+本地开发、隔离测试和发布流程见 [`AGENTS.md`](./AGENTS.md)。
 
 ## Options
 

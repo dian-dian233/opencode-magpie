@@ -162,6 +162,12 @@ opencode api post /api/experimental/generate/decisions --data '{
 插件里调用同一能力：`ctx.experimental.generate.decisions({ model, input, questions })`；
 SDK 里是 `client.experimental.generate.decisions`。
 
+OpenCode 目前**没有**内置的决策工具：`generate_image` / `generate_video` 是 agent 可直接调用的工具
+（而且两者都显式设了 `codemode: false`，只能在 Code Mode 外直接调用）；决策模型只能通过上面的
+Generate API 使用。若要让 agent 调用，需要插件用 `ctx.tool.transform` 注册一个自定义工具，内部调用
+`ctx.experimental.generate.decisions`。自定义工具不写 `options.codemode: false` 时，默认也会出现在
+Code Mode 的 `tools.*` 里。
+
 ## Verify
 
 ```bash

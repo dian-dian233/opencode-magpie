@@ -75,6 +75,9 @@ HOME="$T/home" opencode api --server http://127.0.0.1:5114 get /api/model | jq .
 - decision models are one-shot only: sessions and subagents reject them. They are reachable
   through `Generate.decisions` (`POST /api/experimental/generate/decisions`, SDK
   `client.experimental.generate.decisions`, plugin `ctx.experimental.generate.decisions`).
+  There is no built-in decision tool; `generate_image` / `generate_video` are tools and both set
+  `codemode: false`, so they are direct-only. A custom plugin tool is the way to expose decisions
+  to an agent, and is code-mode eligible unless it sets `options.codemode: false`.
 - video models (`?kind=video`) are deliberately not registered: this OpenCode version has no
   generic openai-compatible video adapter. Do not fake one with the image package.
 - model ids contain `/` (`auto/deepseek-v4.1-flash`); never split `provider/model`.

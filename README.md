@@ -143,6 +143,25 @@ chat 模型统一使用 `@opencode/ai/providers/openai-compatible`（实测这�
 `@opencode/ai/providers/openai-compatible/decisions`，`type` 为 `"decision"`；
 OpenCode 通过 `POST {baseURL}/systemone`（即网关的 `/v1/systemone`）提问。
 
+决策模型不是聊天模型：`/models` 不会把它们作为会话模型，agent 循环、子 agent、压缩也不会自动使用它们。
+它们是 OpenCode 的一次性“结构化判断”接口，按问题返回带概率的答案，无状态、按 token 计费：
+
+```bash
+opencode api post /api/experimental/generate/decisions --data '{
+  "model": {"providerID": "magpie", "id": "typesafe/jev-latest"},
+  "input": [{"type": "text", "text": "My payments have failed for three days."}],
+  "questions": [
+    {"type": "predicate", "name": "urgent", "instructions": "Does this need urgent attention?"},
+    {"type": "choice", "name": "team", "instructions": "Which team should handle it?",
+     "choices": [{"value": "billing"}, {"value": "support"}]}
+  ]
+}'
+```
+
+返回示例：`{"answers":[{"type":"predicate","name":"urgent","probability":0.96}, ...]}`。
+插件里调用同一能力：`ctx.experimental.generate.decisions({ model, input, questions })`；
+SDK 里是 `client.experimental.generate.decisions`。
+
 ## Verify
 
 ```bash

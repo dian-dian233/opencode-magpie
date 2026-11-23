@@ -2,8 +2,9 @@
  * Magpie gateway provider for OpenCode V2.
  *
  * Discovers the model catalog of a Magpie gateway (`GET /v1/models`, plus
- * `GET /v1/models?kind=image` for image models), maps every entry onto an
- * OpenCode model, and keeps it fresh:
+ * `GET /v1/models?kind=image` for image models and `X-Magpie-Deciders: 1`
+ * for decision/System One models), maps every entry onto an OpenCode model,
+ * and keeps it fresh:
  *
  * - registers a `magpie` provider through `ctx.provider.transform`
  * - fetches the catalog during setup, so models exist as soon as the plugin loads
@@ -15,7 +16,8 @@
  *   { "plugins": [{ "package": ".../magpie", "options": {
  *       "baseURL": "http://127.0.0.1:3425/v1",
  *       "apiKey": "{env:MAGPIE_API_KEY}",
- *       "includeImages": true
+ *       "includeImages": true,
+ *       "includeDecisions": true
  *   }}]}
  *
  * Credentials come from the plugin options, the process environment, or a
@@ -39,9 +41,13 @@ const MAX_CATALOG_PAGES = 20
 
 const PACKAGE_OPENAI = "@opencode/ai/providers/openai-compatible"
 const PACKAGE_IMAGES = "@opencode/ai/providers/openai-compatible/images"
+const PACKAGE_DECISIONS = "@opencode/ai/providers/openai-compatible/decisions"
 
 /** Catalog `kind`/`type` values that are never chat models. */
-const NON_CHAT_KINDS = new Set(["image", "video", "classifier", "embedding", "rerank"])
+const NON_CHAT_KINDS = new Set(["image", "video", "decision", "classifier", "embedding", "rerank"])
+
+/** `/v1/models` lists decision models only when the caller names the kinds it wants. */
+const DECIDERS_HEADER = "X-Magpie-Deciders"
 
 // =============================================================================
 // Small parsing helpers (mirrors pi's extension)
@@ -98,6 +104,7 @@ interface Settings {
   baseURL: string
   apiKey?: string
   includeImages: boolean
+  includeDecisions: boolean
   timeout: number
 }
 
@@ -141,9 +148,10 @@ function baseSettings(options: Record<string, unknown>): Settings {
   const apiKey = optionApiKey || asString(process.env[API_KEY_ENV])
 
   const includeImages = asBoolean(options.includeImages) ?? true
+  const includeDecisions = asBoolean(options.includeDecisions) ?? true
   const timeout = asPositiveNumber(options.timeout) ?? CATALOG_TIMEOUT_MS
 
-  return { baseURL, apiKey, includeImages, timeout }
+  return { baseURL, apiKey, includeImages, includeDecisions, timeout }
 }
 
 function providerInfo(settings: Settings): Provider.Info {
@@ -206,9 +214,11 @@ async function fetchJson(
   url: string,
   apiKey: string | undefined,
   signal: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ): Promise<unknown> {
   const headers = new Headers({ accept: "application/json" })
   if (apiKey) headers.set("authorization", `Bearer ${apiKey}`)
+  for (const [name, value] of Object.entries(extraHeaders ?? {})) headers.set(name, value)
 
   const response = await fetch(url, { headers, signal })
   if (!response.ok) throw await requestError(response, url)
@@ -221,6 +231,7 @@ async function fetchCatalogEntries(
   apiKey: string | undefined,
   kind: "image" | undefined,
   timeoutMs: number,
+  extraHeaders?: Record<string, string>,
 ): Promise<unknown[]> {
   const endpoint = modelsEndpoint(baseUrl)
   const entries: unknown[] = []
@@ -231,7 +242,7 @@ async function fetchCatalogEntries(
   for (let page = 0; url && page < MAX_CATALOG_PAGES; page++) {
     if (seen.has(url)) break
     seen.add(url)
-    const payload = await fetchJson(url, apiKey, signal)
+    const payload = await fetchJson(url, apiKey, signal, extraHeaders)
     entries.push(...extractModelEntries(payload))
     url = nextCatalogPageUrl(url, payload)
   }
@@ -264,6 +275,12 @@ function isImageCatalogEntry(entry: unknown): boolean {
   if (kind === "image") return true
   if (kind !== undefined && NON_CHAT_KINDS.has(kind)) return false
   return outputModalities(raw).includes("image")
+}
+
+/** Decision (System One) models are listed only under DECIDERS_HEADER. */
+function isDecisionCatalogEntry(entry: unknown): boolean {
+  const raw = asRecord(entry)
+  return raw !== undefined && catalogKind(raw) === "decision"
 }
 
 function isChatCatalogEntry(entry: unknown): boolean {
@@ -446,6 +463,42 @@ function toImageModel(raw: Record<string, unknown>): Model.Info | undefined {
   return model as Model.Info
 }
 
+/** A decision model answers System One questions at `/v1/systemone`, not chat. */
+function toDecisionModel(raw: Record<string, unknown>): Model.Info | undefined {
+  const id = entryId(raw)
+  if (!id) return undefined
+
+  const contextWindow =
+    asPositiveNumber(raw.context_window) ??
+    asPositiveNumber(raw.contextWindow) ??
+    asPositiveNumber(raw.context_length) ??
+    asPositiveNumber(raw.max_input_tokens) ??
+    asPositiveNumber(raw.maxInputTokens) ??
+    128_000
+  const model = {
+    id: Model.ID.make(id),
+    modelID: Model.ID.make(id),
+    providerID: Provider.ID.make(PROVIDER_ID),
+    type: "decision",
+    name: entryName(raw, id),
+    package: PACKAGE_DECISIONS,
+    capabilities: {
+      tools: false,
+      input: inferInput(raw),
+      // OpenCode's own decision models say "decision", not a text reply.
+      output: ["decision"],
+      temperature: false,
+    },
+    variants: [] as Model.Info["variants"],
+    time: { released: releaseTime(raw) },
+    cost: parseCost(raw),
+    status: "active",
+    enabled: true,
+    limit: { context: contextWindow, output: 0 },
+  }
+  return model as Model.Info
+}
+
 function dedupe<T extends { id: string }>(models: readonly T[]): T[] {
   const byId = new Map<string, T>()
   for (const model of models) byId.set(model.id, model)
@@ -457,17 +510,29 @@ function dedupe<T extends { id: string }>(models: readonly T[]): T[] {
 // =============================================================================
 
 async function fetchCatalog(settings: Settings): Promise<Model.Info[]> {
-  const [chatEntries, imageEntries] = await Promise.all([
-    fetchCatalogEntries(settings.baseURL, settings.apiKey, undefined, settings.timeout),
+  const [listed, imageEntries] = await Promise.all([
+    fetchCatalogEntries(
+      settings.baseURL,
+      settings.apiKey,
+      undefined,
+      settings.timeout,
+      settings.includeDecisions ? { [DECIDERS_HEADER]: "1" } : undefined,
+    ),
     settings.includeImages
       ? fetchCatalogEntries(settings.baseURL, settings.apiKey, "image", settings.timeout).catch(() => [])
       : Promise.resolve([]),
   ])
 
-  const chat = chatEntries
+  const chat = listed
     .filter(isChatCatalogEntry)
     .map((entry) => toChatModel(asRecord(entry) ?? {}))
     .filter((model): model is Model.Info => model !== undefined)
+  const decisions = settings.includeDecisions
+    ? listed
+        .filter(isDecisionCatalogEntry)
+        .map((entry) => toDecisionModel(asRecord(entry) ?? {}))
+        .filter((model): model is Model.Info => model !== undefined)
+    : []
   const image = settings.includeImages
     ? imageEntries
         .filter(isImageCatalogEntry)
@@ -475,7 +540,7 @@ async function fetchCatalog(settings: Settings): Promise<Model.Info[]> {
         .filter((model): model is Model.Info => model !== undefined)
     : []
 
-  return dedupe([...chat, ...image])
+  return dedupe([...chat, ...decisions, ...image])
 }
 
 // =============================================================================
